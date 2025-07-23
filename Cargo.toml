@@ -3,6 +3,10 @@ name = "simpple-vm"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "simpple-blog"
+path = "src/simpple-blog/main.rs"
+
 [lib]
 name = "simpple_vm"
 path = "src/lib.rs"
@@ -11,7 +15,11 @@ path = "src/lib.rs"
 ahv = "0.3.0"
 anyhow = "1.0"
 bitfield = "0.19.1"
+capstone = "0.13.0"
 env_logger = "0.11.8"
 keystone-engine = { version = "0.1.0", features = ["use-system-lib"] }
 log = "0.4.27"
 thiserror = "2.0"
+
+[build-dependencies]
+cc = "1.2"

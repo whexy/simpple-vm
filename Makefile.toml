@@ -2,50 +2,62 @@
 default_to_workspace = false
 
 [env]
-BINARY_NAME = "simpple-vm"
+BINARIES = "simpple-vm simpple-blog"
 ENTITLEMENTS_PATH = "entitlements.plist"
 
-# Build debug version
+# Build debug version for all binaries
 [tasks.build]
 command = "cargo"
 args = ["build"]
 
-# Build release version
+# Build release version for all binaries
 [tasks.build-release]
 command = "cargo"
 args = ["build", "--release"]
 
-# Sign debug binary
+# Generic signing task for debug binaries
 [tasks.sign-debug]
 condition = { platforms = ["mac"] }
 dependencies = ["build"]
-env = { BINARY_PATH = "target/debug/${BINARY_NAME}" }
-command = "codesign"
-args = ["--force", "--sign", "-", "--entitlements", "${ENTITLEMENTS_PATH}", "${BINARY_PATH}"]
+script = '''
+for binary in ${BINARIES}; do
+    echo "Signing debug binary: $binary"
+    codesign --force --sign - --entitlements "${ENTITLEMENTS_PATH}" "target/debug/$binary"
+done
+'''
 
-# Sign release binary
+# Generic signing task for release binaries
 [tasks.sign-release]
 condition = { platforms = ["mac"] }
 dependencies = ["build-release"]
-env = { BINARY_PATH = "target/release/${BINARY_NAME}" }
-command = "codesign"
-args = ["--force", "--sign", "-", "--entitlements", "${ENTITLEMENTS_PATH}", "${BINARY_PATH}"]
+script = '''
+for binary in ${BINARIES}; do
+    echo "Signing release binary: $binary"
+    codesign --force --sign - --entitlements "${ENTITLEMENTS_PATH}" "target/release/$binary"
+done
+'''
 
 # Verify debug binary entitlements
 [tasks.verify-debug]
 condition = { platforms = ["mac"] }
 dependencies = ["sign-debug"]
-env = { BINARY_PATH = "target/debug/${BINARY_NAME}" }
-command = "codesign"
-args = ["--display", "--entitlements", "-", "${BINARY_PATH}"]
+script = '''
+for binary in ${BINARIES}; do
+    echo "Verifying debug binary: $binary"
+    codesign --display --entitlements - "target/debug/$binary"
+done
+'''
 
 # Verify release binary entitlements
 [tasks.verify-release]
 condition = { platforms = ["mac"] }
 dependencies = ["sign-release"]
-env = { BINARY_PATH = "target/release/${BINARY_NAME}" }
-command = "codesign"
-args = ["--display", "--entitlements", "-", "${BINARY_PATH}"]
+script = '''
+for binary in ${BINARIES}; do
+    echo "Verifying release binary: $binary"
+    codesign --display --entitlements - "target/release/$binary"
+done
+'''
 
 # Build and sign debug (main task)
 [tasks.build-and-sign]
@@ -57,3 +69,4 @@ dependencies = ["verify-release"]
 
 [tasks.default]
 alias = "build-and-sign"
+

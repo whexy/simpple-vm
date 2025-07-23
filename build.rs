@@ -1,3 +1,4 @@
 fn main() {
-    println!("cargo:rustc-link-lib=c++");
+    println!("cargo:rustc-link-arg=-lc++");
+    println!("cargo:rustc-link-arg=-lc++abi");
 }

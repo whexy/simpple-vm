@@ -10,6 +10,8 @@ pub enum VmError {
     Hypervisor(HypervisorError),
     #[error("Keystone error: {0}")]
     Keystone(#[from] keystone_engine::KeystoneError),
+    #[error("Capstone error: {0}")]
+    Capstone(#[from] capstone::Error),
     #[error("Other error: {0}")]
     Other(#[from] anyhow::Error),
 }
@@ -28,6 +30,11 @@ fn gen_payload() -> Result<Vec<u8>> {
         _start:
             mov x0, #42
             add x0, x0, #3
+            
+            // Try to access unmapped memory at 0x09000000 (UART region)
+            mov x1, #0x09000000
+            ldr w2, [x1]        // This should cause a data abort
+            
             hvc #0
             ret
     "#;
@@ -87,10 +94,15 @@ fn main() -> Result<(), VmError> {
                     0x16 => {
                         log::info!("HVC instruction executed successfully.");
                     }
+                    0x24 => {
+                        log::info!("Data Abort exception occurred.");
+                        log::info!("Address: {:#x}", exception.virtual_address);
+                    }
                     _ => {
                         log::warn!("unexpected exception: {:#x}", exception.syndrome);
+                        println!("exception: {exception:?}")
                     }
-                }
+                };
             }
             reason => {
                 log::error!("Unexpected exit reason: {reason:?}");
