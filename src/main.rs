@@ -1,26 +1,9 @@
 use ahv::*;
 use anyhow::Result;
 use keystone_engine::{Arch, Keystone, Mode};
+use simpple_vm::SimppleError;
+use simpple_vm::mems::SharedMemory;
 use simpple_vm::regs::SpsrEl3;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum VmError {
-    #[error("Hypervisor error: {0:?}")]
-    Hypervisor(HypervisorError),
-    #[error("Keystone error: {0}")]
-    Keystone(#[from] keystone_engine::KeystoneError),
-    #[error("Capstone error: {0}")]
-    Capstone(#[from] capstone::Error),
-    #[error("Other error: {0}")]
-    Other(#[from] anyhow::Error),
-}
-
-impl From<HypervisorError> for VmError {
-    fn from(err: HypervisorError) -> Self {
-        VmError::Hypervisor(err)
-    }
-}
 
 fn gen_payload() -> Result<Vec<u8>> {
     let engine = Keystone::new(Arch::ARM64, Mode::LITTLE_ENDIAN)?;
@@ -61,18 +44,21 @@ fn gen_payload() -> Result<Vec<u8>> {
 
 const PAYLOAD_ADDR: hv_ipa_t = 0x20000;
 
-fn main() -> Result<(), VmError> {
+fn main() -> Result<(), SimppleError> {
     env_logger::init();
 
     let user_payload = gen_payload()?;
-
     let mut virtual_machine: VirtualMachine = VirtualMachine::new(None)?;
-    let payload_allocation = virtual_machine.allocate_from(&user_payload)?;
-    virtual_machine.map(
-        payload_allocation,
+    let mut mmu = SharedMemory::default();
+
+    mmu.add_segment(
+        &mut virtual_machine,
         PAYLOAD_ADDR,
-        MemoryPermission::READ_WRITE_EXECUTE,
+        64 * 1024, // 64 KiB for the payload
+        MemoryPermission::EXECUTE,
     )?;
+
+    mmu.write_bytes(&mut virtual_machine, PAYLOAD_ADDR, user_payload.as_slice())?;
 
     {
         let mut vcpu = virtual_machine.create_vcpu(None)?;

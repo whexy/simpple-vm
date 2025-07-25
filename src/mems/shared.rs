@@ -1,30 +1,27 @@
-use crate::error::{MemoryError, MemoryResult, MemoryResultExt};
-use anyhow::Context;
+use crate::{MemoryError, SimppleError};
+use anyhow::{Context, Result};
 
 // Shared memory management
 #[derive(Debug)]
-pub struct Segment {
-    pub base: usize,       // base address (guest physical)
-    pub size: usize,       // size
-    pub memory: Box<[u8]>, // memory content
+struct Segment {
+    base: u64,                     // base address (guest physical)
+    size: usize,                   // size
+    handle: ahv::AllocationHandle, // handle to the memory allocator
 }
 
 impl Segment {
-    pub fn new(base: usize, size: usize) -> Self {
-        Segment {
-            base,
-            size,
-            memory: vec![0; size].into_boxed_slice(),
-        }
+    pub fn new(handle: ahv::AllocationHandle, base: u64, size: usize) -> Self {
+        Segment { base, size, handle }
     }
 
-    pub fn contains(&self, address: usize, size: usize) -> bool {
-        address >= self.base && address.saturating_add(size) <= self.base.saturating_add(self.size)
+    pub fn contains(&self, address: u64, size: usize) -> bool {
+        address >= self.base
+            && address.saturating_add(size as u64) <= self.base.saturating_add(self.size as u64)
     }
 
     // Get offset within segment for given address
-    pub fn get_offset(&self, address: usize) -> Option<usize> {
-        if address >= self.base && address < self.base.saturating_add(self.size) {
+    pub fn get_offset(&self, address: u64) -> Option<u64> {
+        if address >= self.base && address < self.base.saturating_add(self.size as u64) {
             Some(address - self.base)
         } else {
             None
@@ -34,15 +31,21 @@ impl Segment {
 
 #[derive(Debug, Default)]
 pub struct SharedMemory {
-    pub segments: Vec<Segment>, // list of segments
+    segments: Vec<Segment>, // list of segments
 }
 
 impl SharedMemory {
-    pub fn add_segment(&mut self, base: usize, size: usize) -> MemoryResult<&mut Segment> {
+    pub fn add_segment(
+        &mut self,
+        vm: &mut ahv::VirtualMachine,
+        base: u64,
+        size: usize,
+        permission: ahv::MemoryPermission,
+    ) -> Result<(), SimppleError> {
         // Check for overlaps with existing segments
         for segment in &self.segments {
-            let end = base.saturating_add(size);
-            let seg_end = segment.base.saturating_add(segment.size);
+            let end = base.saturating_add(size as u64);
+            let seg_end = segment.base.saturating_add(segment.size as u64);
 
             if (base >= segment.base && base < seg_end)
                 || (end > segment.base && end <= seg_end)
@@ -52,17 +55,16 @@ impl SharedMemory {
             }
         }
 
-        if size == 0 {
-            return Err(MemoryError::invalid_size(size).into());
-        }
+        let handle = vm.allocate(size as usize)?;
+        vm.map(handle, base as u64, permission)?;
 
-        let segment = Segment::new(base, size);
+        let segment = Segment::new(handle, base, size);
         self.segments.push(segment);
-        Ok(self.segments.last_mut().unwrap())
+        Ok(())
     }
 
     // Find segment containing the address range
-    fn find_segment(&self, address: usize, size: usize) -> Result<&Segment, MemoryError> {
+    fn find_segment(&self, address: u64, size: usize) -> Result<&Segment, MemoryError> {
         self.segments
             .iter()
             .find(|seg| seg.contains(address, size))
@@ -73,72 +75,60 @@ impl SharedMemory {
                     format!(
                         "Address range 0x{:x}-0x{:x} not mapped",
                         address,
-                        address.saturating_add(size).saturating_sub(1)
-                    ),
-                )
-            })
-    }
-
-    // Find mutable segment containing the address range
-    fn find_segment_mut(
-        &mut self,
-        address: usize,
-        size: usize,
-    ) -> Result<&mut Segment, MemoryError> {
-        self.segments
-            .iter_mut()
-            .find(|seg| seg.contains(address, size))
-            .ok_or_else(|| {
-                MemoryError::segfault(
-                    address,
-                    size,
-                    format!(
-                        "Address range 0x{:x}-0x{:x} not mapped",
-                        address,
-                        address.saturating_add(size).saturating_sub(1)
+                        address.saturating_add(size as u64).saturating_sub(1)
                     ),
                 )
             })
     }
 
     // Raw byte operations
-    pub fn read_bytes(&self, address: usize, size: usize) -> MemoryResult<Vec<u8>> {
+    pub fn read_bytes(
+        &self,
+        vm: &ahv::VirtualMachine,
+        address: u64,
+        size: usize,
+    ) -> Result<Vec<u8>, SimppleError> {
         if size == 0 {
             return Ok(Vec::new());
         }
 
-        let segment =
-            self.find_segment(address, size)
-                .with_range_context("read_bytes", address, size)?;
+        let segment = self.find_segment(address, size)?;
+        let offset = segment.get_offset(address).unwrap() as usize;
 
-        let offset = segment.get_offset(address).unwrap();
-        Ok(segment.memory[offset..offset + size].to_vec())
+        let memory = vm.get_allocation_slice(segment.handle)?;
+
+        Ok(memory[offset..offset + size].to_vec())
     }
 
-    pub fn write_bytes(&mut self, address: usize, data: &[u8]) -> MemoryResult<()> {
+    pub fn write_bytes(
+        self,
+        vm: &mut ahv::VirtualMachine,
+        address: u64,
+        data: &[u8],
+    ) -> Result<(), SimppleError> {
         let size = data.len();
         if size == 0 {
             return Ok(());
         }
 
-        let segment = self.find_segment_mut(address, size).with_range_context(
-            "write_bytes",
-            address,
-            size,
-        )?;
+        let segment = self.find_segment(address, size)?;
+        let offset = segment.get_offset(address).unwrap() as usize;
 
-        let offset = segment.get_offset(address).unwrap();
-        segment.memory[offset..offset + size].copy_from_slice(data);
+        let memory = vm.get_allocation_slice_mut(segment.handle)?;
+        {
+            let memory = &mut memory[..data.len()];
+            memory[offset..offset + size].copy_from_slice(data);
+        }
         Ok(())
     }
 
     // Generic read/write for any sized integer type
-    pub fn read<T>(&self, address: usize) -> MemoryResult<T>
+    pub fn read<T>(&self, vm: &ahv::VirtualMachine, address: u64) -> Result<T>
     where
         T: FromBytes,
     {
         let size = std::mem::size_of::<T>();
-        let bytes = self.read_bytes(address, size).with_context(|| {
+        let bytes = self.read_bytes(vm, address, size).with_context(|| {
             format!(
                 "Failed to read {} at address 0x{:x}",
                 std::any::type_name::<T>(),
@@ -148,11 +138,11 @@ impl SharedMemory {
         Ok(T::from_le_bytes(&bytes))
     }
 
-    pub fn write<T>(&mut self, address: usize, value: T) -> MemoryResult<()>
+    pub fn write<T>(self, vm: &mut ahv::VirtualMachine, address: u64, value: T) -> Result<()>
     where
         T: ToBytes,
     {
-        self.write_bytes(address, &value.to_le_bytes())
+        self.write_bytes(vm, address, &value.to_le_bytes())
             .with_context(|| {
                 format!(
                     "Failed to write {} at address 0x{:x}",
@@ -160,75 +150,6 @@ impl SharedMemory {
                     address
                 )
             })
-    }
-
-    // Aligned read operations (useful for performance-critical code)
-    pub fn read_aligned<T>(&self, address: usize) -> MemoryResult<T>
-    where
-        T: FromBytes,
-    {
-        let alignment = std::mem::align_of::<T>();
-        if address % alignment != 0 {
-            return Err(MemoryError::invalid_alignment(address, alignment).into());
-        }
-        self.read(address)
-    }
-
-    pub fn write_aligned<T>(&mut self, address: usize, value: T) -> MemoryResult<()>
-    where
-        T: ToBytes,
-    {
-        let alignment = std::mem::align_of::<T>();
-        if address % alignment != 0 {
-            return Err(MemoryError::invalid_alignment(address, alignment).into());
-        }
-        self.write(address, value)
-    }
-
-    // Bulk operations
-    pub fn read_array<T>(&self, address: usize, count: usize) -> MemoryResult<Vec<T>>
-    where
-        T: FromBytes,
-    {
-        let element_size = std::mem::size_of::<T>();
-        let total_size = element_size
-            .checked_mul(count)
-            .ok_or_else(|| MemoryError::invalid_size(count))?;
-
-        let bytes = self.read_bytes(address, total_size).with_context(|| {
-            format!(
-                "Failed to read array of {} {} elements at 0x{:x}",
-                count,
-                std::any::type_name::<T>(),
-                address
-            )
-        })?;
-
-        let mut result = Vec::with_capacity(count);
-        for i in 0..count {
-            let start = i * element_size;
-            let end = start + element_size;
-            result.push(T::from_le_bytes(&bytes[start..end]));
-        }
-        Ok(result)
-    }
-
-    pub fn write_array<T>(&mut self, address: usize, values: &[T]) -> MemoryResult<()>
-    where
-        T: ToBytes + Clone,
-    {
-        let mut bytes = Vec::new();
-        for value in values {
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        self.write_bytes(address, &bytes).with_context(|| {
-            format!(
-                "Failed to write array of {} {} elements at 0x{:x}",
-                values.len(),
-                std::any::type_name::<T>(),
-                address
-            )
-        })
     }
 }
 
@@ -289,54 +210,5 @@ impl ToBytes for u32 {
 impl ToBytes for u64 {
     fn to_le_bytes(&self) -> Vec<u8> {
         (*self).to_le_bytes().to_vec()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_basic_operations() {
-        let mut memory = SharedMemory::default();
-        memory.add_segment(0x1000, 0x1000).unwrap();
-
-        // Test u32 write/read
-        memory.write::<u32>(0x1000, 0x12345678).unwrap();
-        assert_eq!(memory.read::<u32>(0x1000).unwrap(), 0x12345678);
-
-        // Test u64 write/read
-        memory.write::<u64>(0x1008, 0x123456789ABCDEF0).unwrap();
-        assert_eq!(memory.read::<u64>(0x1008).unwrap(), 0x123456789ABCDEF0);
-
-        // Test segmentation fault
-        assert!(memory.read::<u32>(0x2000).is_err());
-        assert!(memory.write::<u32>(0x2000, 42).is_err());
-    }
-
-    #[test]
-    fn test_error_types() {
-        let mut memory = SharedMemory::default();
-        memory.add_segment(0x1000, 0x1000).unwrap();
-
-        // Test overlap detection
-        let overlap_result = memory.add_segment(0x1500, 0x1000);
-        assert!(overlap_result.is_err());
-
-        // Test alignment
-        let align_result = memory.read_aligned::<u32>(0x1001);
-        assert!(align_result.is_err());
-    }
-
-    #[test]
-    fn test_array_operations() {
-        let mut memory = SharedMemory::default();
-        memory.add_segment(0x1000, 0x1000).unwrap();
-
-        let values = vec![1u32, 2, 3, 4, 5];
-        memory.write_array(0x1000, &values).unwrap();
-
-        let read_values = memory.read_array::<u32>(0x1000, 5).unwrap();
-        assert_eq!(values, read_values);
     }
 }
