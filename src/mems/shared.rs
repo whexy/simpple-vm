@@ -55,8 +55,8 @@ impl SharedMemory {
             }
         }
 
-        let handle = vm.allocate(size as usize)?;
-        vm.map(handle, base as u64, permission)?;
+        let handle = vm.allocate(size)?;
+        vm.map(handle, base, permission)?;
 
         let segment = Segment::new(handle, base, size);
         self.segments.push(segment);
@@ -101,7 +101,7 @@ impl SharedMemory {
     }
 
     pub fn write_bytes(
-        self,
+        &self,
         vm: &mut ahv::VirtualMachine,
         address: u64,
         data: &[u8],
@@ -138,7 +138,7 @@ impl SharedMemory {
         Ok(T::from_le_bytes(&bytes))
     }
 
-    pub fn write<T>(self, vm: &mut ahv::VirtualMachine, address: u64, value: T) -> Result<()>
+    pub fn write<T>(&self, vm: &mut ahv::VirtualMachine, address: u64, value: T) -> Result<()>
     where
         T: ToBytes,
     {
