@@ -1,3 +1,4 @@
+pub mod debugger;
 pub mod err;
 pub mod mems;
 pub mod regs;
