@@ -4,12 +4,17 @@ use simpple_vm::debugger::Debugger;
 use simpple_vm::esr_el2::ExceptionClass;
 use simpple_vm::mems::SharedMemory;
 use simpple_vm::regs::SpsrEl3;
+use simpple_vm::uart::Pl011Device;
+use simpple_vm::utils::{get_register_value, set_register_value};
 use simpple_vm::{DataAbortISS, EsrEl2, MmioManager, SimppleError};
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 
 mod payload;
-use payload::gen_payload;
+use payload::load_uboot;
 
-const PAYLOAD_ADDR: u64 = 0x20000;
+const PAYLOAD_ADDR: u64 = 0x40000000;
+const MEMORY_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 fn run() -> Result<(), SimppleError> {
     env_logger::init();
@@ -22,18 +27,38 @@ fn run() -> Result<(), SimppleError> {
     mmu.add_segment(
         &mut virtual_machine,
         PAYLOAD_ADDR,
-        64 * 1024, // 64 KiB for the payload
-        MemoryPermission::EXECUTE,
+        MEMORY_SIZE,
+        MemoryPermission::READ_WRITE_EXECUTE,
     )?;
 
-    // Setup MMIO Manager
+    // Setup devices
     let mut mmio_manager = MmioManager::default();
+    let mut uart_device = Pl011Device::default();
+    let output_buffer = Arc::new(Mutex::new(Vec::new()));
+    let output_buffer_clone = output_buffer.clone();
+    uart_device.set_output_handler(move |data| {
+        let mut buffer = output_buffer_clone.lock().unwrap();
+        buffer.push(data);
+
+        // Print u-boot output in real time
+        if data == b'\n' || buffer.len() > 80 {
+            let line = String::from_utf8_lossy(&buffer);
+            print!("U-boot: {line}");
+            std::io::stdout().flush().unwrap();
+            buffer.clear();
+        }
+    });
+
+    mmio_manager.register_device(
+        0x09000000, // Base address for UART
+        Box::new(uart_device),
+    )?;
 
     // Setup Debugger
     let debugger = Debugger::new()?;
 
     // Setup code segment
-    let user_payload = gen_payload()?;
+    let user_payload = load_uboot()?;
     mmu.write_bytes(&mut virtual_machine, PAYLOAD_ADDR, user_payload.as_slice())?;
 
     // Setup vCPU
@@ -61,20 +86,22 @@ fn run() -> Result<(), SimppleError> {
                     ExceptionClass::DataAbortLowerEl | ExceptionClass::DataAbortSameEl => {
                         let iss = DataAbortISS::from_raw(esr_el2.iss() as u32);
 
-                        mmio_manager.handle_access(
+                        let result = mmio_manager.handle_access(
                             exception.physical_address,
                             iss.access_size().into(),
                             iss.is_write(),
                             if iss.is_write() {
-                                Some(vcpu.get_register(iss.access_register())?)
+                                Some(get_register_value(&mut vcpu, iss.access_register())?)
                             } else {
                                 None
                             },
                         )?;
 
                         if !iss.is_write() {
-                            vcpu.set_register(iss.access_register(), 0x42)?;
+                            set_register_value(&mut vcpu, iss.access_register(), result.unwrap())?;
                         }
+
+                        log::info!("Output Buffr: {:?}", output_buffer.lock().unwrap());
                     }
                     ExceptionClass::HvcAArch64 => {
                         log::info!("HVC instruction executed successfully.");

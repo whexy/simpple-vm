@@ -52,6 +52,12 @@ impl MmioManager {
         is_write: bool,
         value: Option<u64>,
     ) -> Result<Option<u64>, MmioError> {
+        if is_write {
+            log::debug!("Write {} to {addr:#0x} of size {size}", value.unwrap());
+        } else {
+            log::debug!("Read from {addr:#0x} of size {size}");
+        }
+
         // Validate access size
         if !matches!(size, 1 | 2 | 4 | 8) {
             return Err(MmioError::InvalidSize { size });
@@ -77,6 +83,7 @@ impl MmioManager {
             Ok(None)
         } else {
             let value = region.device.read(offset, size)?;
+            log::debug!("value: {value}");
             Ok(Some(value))
         }
     }
