@@ -230,6 +230,17 @@ impl From<u8> for SyndromeAccessSize {
     }
 }
 
+impl From<SyndromeAccessSize> for usize {
+    fn from(val: SyndromeAccessSize) -> Self {
+        match val {
+            SyndromeAccessSize::Byte => 1,
+            SyndromeAccessSize::Halfword => 2,
+            SyndromeAccessSize::Word => 4,
+            SyndromeAccessSize::DoubleWord => 8,
+        }
+    }
+}
+
 bitfield! {
     /// ISS - Instruction Specific Syndrome
     ///
@@ -284,7 +295,7 @@ impl DataAbortISS {
     }
 
     pub fn is_write(&self) -> bool {
-        !self.wnr()
+        self.wnr()
     }
 
     pub fn access_register(&self) -> Register {

@@ -4,14 +4,14 @@ use simpple_vm::debugger::Debugger;
 use simpple_vm::esr_el2::ExceptionClass;
 use simpple_vm::mems::SharedMemory;
 use simpple_vm::regs::SpsrEl3;
-use simpple_vm::{DataAbortISS, EsrEl2, SimppleError};
+use simpple_vm::{DataAbortISS, EsrEl2, MmioManager, SimppleError};
 
 mod payload;
 use payload::gen_payload;
 
 const PAYLOAD_ADDR: u64 = 0x20000;
 
-fn main() -> Result<(), SimppleError> {
+fn run() -> Result<(), SimppleError> {
     env_logger::init();
 
     // Setup virtual machine
@@ -26,6 +26,10 @@ fn main() -> Result<(), SimppleError> {
         MemoryPermission::EXECUTE,
     )?;
 
+    // Setup MMIO Manager
+    let mut mmio_manager = MmioManager::default();
+
+    // Setup Debugger
     let debugger = Debugger::new()?;
 
     // Setup code segment
@@ -56,7 +60,19 @@ fn main() -> Result<(), SimppleError> {
                 match esr_el2.exception_class() {
                     ExceptionClass::DataAbortLowerEl | ExceptionClass::DataAbortSameEl => {
                         let iss = DataAbortISS::from_raw(esr_el2.iss() as u32);
-                        if iss.is_write() {
+
+                        mmio_manager.handle_access(
+                            exception.physical_address,
+                            iss.access_size().into(),
+                            iss.is_write(),
+                            if iss.is_write() {
+                                Some(vcpu.get_register(iss.access_register())?)
+                            } else {
+                                None
+                            },
+                        )?;
+
+                        if !iss.is_write() {
                             vcpu.set_register(iss.access_register(), 0x42)?;
                         }
                     }
@@ -71,7 +87,7 @@ fn main() -> Result<(), SimppleError> {
                 };
             }
             reason => {
-                log::error!("Unexpected exit reason: {reason:?}");
+                log::error!("Unexpected exit reason: {reason:#?}");
             }
         };
 
@@ -80,4 +96,13 @@ fn main() -> Result<(), SimppleError> {
     }
 
     Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("{e}");
+        }
+    }
 }
