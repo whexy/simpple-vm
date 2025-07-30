@@ -64,6 +64,41 @@ impl Register for RoRegister {
     }
 
     fn reset(&mut self) {
-        self.value = 0
+        self.value = 0; // Reset to zero
+    }
+}
+
+/// Write-only register with side effects
+pub struct WoRegister<F>
+where
+    F: FnMut(u64),
+{
+    write_handler: F,
+}
+
+impl<F> WoRegister<F>
+where
+    F: FnMut(u64),
+{
+    pub fn new(write_handler: F) -> Self {
+        Self { write_handler }
+    }
+}
+
+impl<F> Register for WoRegister<F>
+where
+    F: FnMut(u64),
+{
+    fn read(&self) -> u64 {
+        0 // Write-only registers return 0 on read
+    }
+
+    fn write(&mut self, value: u64, _size: usize) -> Result<(), MmioError> {
+        (self.write_handler)(value);
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        // No state to reset for write-only registers
     }
 }
