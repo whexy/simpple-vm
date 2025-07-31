@@ -19,3 +19,10 @@ pub fn load_uboot() -> Result<Vec<u8>> {
 
     Ok(uboot_binary)
 }
+
+pub fn load_dtb() -> Result<Vec<u8>> {
+    let dtb = fs::read("tests/integration/simpple.dtb").expect("Failed to read device tree binary");
+    log::info!("Loaded device tree binary of size: {}", dtb.len());
+
+    Ok(dtb)
+}

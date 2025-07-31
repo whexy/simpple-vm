@@ -45,29 +45,13 @@ impl MmioManager {
         Ok(())
     }
 
-    pub fn handle_access(
-        &mut self,
-        addr: u64,
-        size: usize,
-        is_write: bool,
-        value: Option<u64>,
-    ) -> Result<Option<u64>, MmioError> {
-        if is_write {
-            log::debug!("Write {} to {addr:#0x} of size {size}", value.unwrap());
-        } else {
-            log::debug!("Read from {addr:#0x} of size {size}");
-        }
-
-        // Validate access size
+    fn locate(&mut self, addr: u64, size: usize) -> Result<&mut MmioRegion, MmioError> {
         if !matches!(size, 1 | 2 | 4 | 8) {
             return Err(MmioError::InvalidSize { size });
         }
-
-        // Check alignment
         if addr & (size as u64 - 1) != 0 {
             return Err(MmioError::InvalidAlignment { addr, size });
         }
-
         // Find the device
         let region = self.find_region(addr)?;
         let offset = addr - region.base_addr;
@@ -76,16 +60,22 @@ impl MmioManager {
         if offset + size as u64 > region.size {
             return Err(MmioError::UnmappedAccess(addr));
         }
+        Ok(region)
+    }
 
-        // Dispatch to device
-        if is_write {
-            region.device.write(offset, size, value.unwrap())?;
-            Ok(None)
-        } else {
-            let value = region.device.read(offset, size)?;
-            log::debug!("value: {value}");
-            Ok(Some(value))
-        }
+    pub fn handle_write(&mut self, addr: u64, size: usize, value: u64) -> Result<(), MmioError> {
+        log::debug!("Write {value} to {addr:#0x} of size {size}");
+        let region = self.locate(addr, size)?;
+        let offset = addr - region.base_addr;
+        region.device.write(offset, size, value)?;
+        Ok(())
+    }
+
+    pub fn handle_read(&mut self, addr: u64, size: usize) -> Result<u64, MmioError> {
+        log::debug!("Read from {addr:#0x} of size {size}");
+        let region = self.locate(addr, size)?;
+        let offset = addr - region.base_addr;
+        region.device.read(offset, size)
     }
 
     fn find_region(&mut self, addr: u64) -> Result<&mut MmioRegion, MmioError> {

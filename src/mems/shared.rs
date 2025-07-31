@@ -115,10 +115,7 @@ impl SharedMemory {
         let offset = segment.get_offset(address).unwrap() as usize;
 
         let memory = vm.get_allocation_slice_mut(segment.handle)?;
-        {
-            let memory = &mut memory[..data.len()];
-            memory[offset..offset + size].copy_from_slice(data);
-        }
+        memory[offset..offset + size].copy_from_slice(data);
         Ok(())
     }
 
