@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::MmioError;
+use crate::err::MmioError;
 
 pub trait MmioDevice {
     fn read(&mut self, offset: u64, size: usize) -> Result<u64, MmioError>;

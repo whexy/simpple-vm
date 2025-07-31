@@ -1,4 +1,5 @@
-use crate::{SharedMemory, SimppleError, SpsrEl3};
+use crate::regs::SpsrEl3;
+use crate::{SharedMemory, SimppleError};
 use ahv::*;
 use anyhow::Result;
 use capstone::prelude::*;
@@ -21,14 +22,16 @@ impl Debugger {
     pub fn decode(&self, payload: &[u8], address: u64) -> Result<()> {
         let instructions = self.cs.disasm_all(payload, address)?;
         for insn in instructions.iter() {
+            let insn_bytes = insn.bytes();
+            let insn_repr =
+                u32::from_le_bytes([insn_bytes[0], insn_bytes[1], insn_bytes[2], insn_bytes[3]]);
             println!(
-                "{:08x}:\t{}\t{}",
+                "{:08x}:\t{:#0x}\t{}\t{}",
                 insn.address(),
+                insn_repr,
                 insn.mnemonic().unwrap_or(""),
                 insn.op_str().unwrap_or("")
             );
-            let detail = self.cs.insn_detail(insn)?;
-            println!("Detail: {detail:?}");
         }
         Ok(())
     }
@@ -167,9 +170,14 @@ impl Debugger {
 }
 
 fn format_instruction(insn: &capstone::Insn, is_current: bool) -> ColoredString {
+    let insn_bytes = insn.bytes();
+    let insn_repr =
+        u32::from_le_bytes([insn_bytes[0], insn_bytes[1], insn_bytes[2], insn_bytes[3]]);
+
     let instruction_text = format!(
-        "{:08x}:\t{}\t{}",
+        "{:08x}:\t{:#0x}\t{}\t{}",
         insn.address(),
+        insn_repr,
         insn.mnemonic().unwrap_or(""),
         insn.op_str().unwrap_or("")
     );

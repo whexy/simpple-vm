@@ -12,7 +12,7 @@ name = "simpple_vm"
 path = "src/lib.rs"
 
 [dependencies]
-ahv = "0.3.0"
+ahv = { path = "../ahv", version = "0.5.0", features = ["macos_15_0_0"] }
 anyhow = "1.0"
 bitfield = "0.19.1"
 capstone = "0.13.0"

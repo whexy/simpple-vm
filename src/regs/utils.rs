@@ -1,5 +1,6 @@
 use ahv::*;
 
+#[derive(Debug)]
 pub enum VRegister {
     Register(Register),
     ZeroRegister,

@@ -1,12 +1,12 @@
 use ahv::*;
 use anyhow::Result;
 use simpple_vm::debugger::Debugger;
-use simpple_vm::esr_el2::ExceptionClass;
+use simpple_vm::devices::uart::Pl011Device;
 use simpple_vm::mems::SharedMemory;
-use simpple_vm::regs::SpsrEl3;
-use simpple_vm::uart::Pl011Device;
-use simpple_vm::utils::{get_register_value, set_register_value};
-use simpple_vm::{DataAbortISS, EsrEl2, MmioManager, SimppleError};
+use simpple_vm::regs::iss::{DataAbortISS, SysRegAbortISS};
+use simpple_vm::regs::utils::{get_register_value, set_register_value};
+use simpple_vm::regs::{EsrEl2, ExceptionClass, SpsrEl3};
+use simpple_vm::{MmioManager, SimppleError};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -14,9 +14,9 @@ mod payload;
 use payload::{load_dtb, load_uboot};
 
 const FIRMWARE_BASE: u64 = 0x0;
-const FIRMWARE_SIZE: u64 = 128 * 1024 * 1024; // 128 MiB for firmware
+// const FIRMWARE_SIZE: u64 = 128 * 1024 * 1024; // 128 MiB for firmware
 const MEMORY_BASE: u64 = 0x40000000;
-const MEMORY_SIZE: usize = 1024 * 1024 * 1024; // 1 GiB
+// const MEMORY_SIZE: usize = 1024 * 1024 * 1024; // 1 GiB
 const UART_BASE: u64 = 0x9000000; // Base address for UART
 
 fn run() -> Result<(), SimppleError> {
@@ -31,16 +31,8 @@ fn run() -> Result<(), SimppleError> {
     // Main Memory
     mmu.add_segment(
         &mut virtual_machine,
-        MEMORY_BASE,
-        MEMORY_SIZE,
-        MemoryPermission::READ_WRITE_EXECUTE,
-    )?;
-
-    // Firmware
-    mmu.add_segment(
-        &mut virtual_machine,
-        FIRMWARE_BASE,
-        FIRMWARE_SIZE as usize,
+        0x0,
+        2 * 1024 * 1024 * 1024, // 2 GiB for main memory,
         MemoryPermission::READ_WRITE_EXECUTE,
     )?;
 
@@ -137,6 +129,17 @@ fn run() -> Result<(), SimppleError> {
                     ExceptionClass::HvcAArch64 => {
                         debugger.print_debug_info(&virtual_machine, &mut vcpu, &mmu)?;
                         log::info!("HVC instruction executed successfully.");
+                        break;
+                    }
+                    ExceptionClass::TrappedSysregAArch64 => {
+                        log::error!("Trapped system register access detected.");
+                        let iss = SysRegAbortISS::from_raw(esr_el2.iss() as u32);
+                        let instr = iss.reconstruct();
+
+                        let payload = instr.to_le_bytes();
+                        debugger.decode(&payload, vcpu.get_register(Register::PC)?)?;
+
+                        debugger.print_debug_info(&virtual_machine, &mut vcpu, &mmu)?;
                         break;
                     }
                     exception_class => {

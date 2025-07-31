@@ -1,4 +1,4 @@
-use crate::MmioError;
+use crate::err::MmioError;
 
 pub trait Register {
     fn read(&self) -> u64;

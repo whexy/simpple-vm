@@ -1,5 +1,5 @@
-use crate::MmioDevice;
-use crate::MmioError;
+use crate::devices::MmioDevice;
+use crate::err::MmioError;
 use std::collections::VecDeque;
 
 // --- ARM PL011 Register Offsets ---

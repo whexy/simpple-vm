@@ -20,6 +20,9 @@ pub enum SimppleError {
 
     #[error("General error: {0}")]
     Anyhow(#[from] anyhow::Error),
+
+    #[error("System register not found: {0}")]
+    SysRegNotFound(String),
 }
 
 impl From<HypervisorError> for SimppleError {

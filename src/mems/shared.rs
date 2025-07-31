@@ -1,4 +1,5 @@
-use crate::{MemoryError, SimppleError};
+use crate::SimppleError;
+use crate::err::MemoryError;
 use anyhow::{Context, Result};
 
 // Shared memory management
