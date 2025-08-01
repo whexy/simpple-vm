@@ -3,14 +3,12 @@ use anyhow::Result;
 use simpple_vm::debugger::Debugger;
 use simpple_vm::devices::gpio::Pl061Gpio;
 use simpple_vm::devices::timer::get_cntpct_el0;
-use simpple_vm::devices::uart::{Pl011Device, Pl011Stdout};
+use simpple_vm::devices::uart::Pl011Device;
 use simpple_vm::mems::SharedMemory;
 use simpple_vm::regs::iss::{DataAbortISS, SysRegAbortISS};
 use simpple_vm::regs::utils::{get_register_value, set_register_value};
 use simpple_vm::regs::{EmulatedSystemRegister, EsrEl2, ExceptionClass, SpsrEl3};
 use simpple_vm::{MmioManager, SimppleError};
-use std::io::Write;
-use std::sync::{Arc, Mutex};
 
 mod payload;
 use payload::{load_dtb, load_uboot};
@@ -23,10 +21,7 @@ const UART_BASE: u64 = 0x9000000; // Base address for UART
 const GPIO_BASE: u64 = 0x3fffe000;
 
 fn run() -> Result<(), SimppleError> {
-    env_logger::init();
-
-    // Setup virtual machine
-    let mut virtual_machine: VirtualMachine = VirtualMachine::new(None)?;
+    let mut virtual_machine = VirtualMachine::new(None)?;
 
     // Setup MMU
     let mut mmu = SharedMemory::default();
@@ -85,17 +80,6 @@ fn run() -> Result<(), SimppleError> {
     vcpu.set_trap_debug_exceptions(true)?;
 
     vcpu.set_vtimer_mask(false)?;
-
-    // let vcpu_addr = &mut vcpu as *mut VirtualCpu as usize;
-    // thread::spawn(move || {
-    //     thread::sleep(std::time::Duration::from_secs(10));
-    //     unsafe {
-    //         let vcpu_ptr = vcpu_addr as *mut ahv::VirtualCpu;
-    //         if let Some(vcpu_ref) = vcpu_ptr.as_mut() {
-    //             let _ = vcpu_ref.exit();
-    //         }
-    //     }
-    // });
 
     loop {
         let result = vcpu.run()?;
@@ -202,6 +186,7 @@ fn run() -> Result<(), SimppleError> {
 }
 
 fn main() {
+    env_logger::init();
     match run() {
         Ok(()) => {}
         Err(e) => {
