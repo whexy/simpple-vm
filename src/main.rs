@@ -117,9 +117,9 @@ fn run() -> Result<(), SimppleError> {
                                 );
                                 match mmio_result {
                                     Ok(_) => {}
-                                    Err(_) => {
+                                    Err(e) => {
                                         log::error!(
-                                            "invalid read from {:#0x}",
+                                            "{e}: invalid read from {:#0x}",
                                             exception.physical_address
                                         );
                                         // let _ = debugger.print_debug_info(
@@ -143,9 +143,9 @@ fn run() -> Result<(), SimppleError> {
                                             value,
                                         )?;
                                     }
-                                    Err(_) => {
+                                    Err(e) => {
                                         log::error!(
-                                            "invalid write to {:#0x}",
+                                            "{e}: invalid write to {:#0x}",
                                             exception.physical_address
                                         );
                                         let _ = debugger.print_debug_info(
@@ -164,12 +164,11 @@ fn run() -> Result<(), SimppleError> {
                         break;
                     }
                     ExceptionClass::TrappedSysregAArch64 => {
-                        log::error!("Trapped system register access detected.");
                         let iss = SysRegAbortISS::from_raw(esr_el2.iss() as u32);
 
                         let system_register = iss.system_register();
                         let gp_register = iss.access_register();
-                        println!(
+                        log::info!(
                             "Accessing system register: {system_register:?} using {gp_register:?}"
                         );
 

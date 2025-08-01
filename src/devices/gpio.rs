@@ -81,11 +81,12 @@ impl Default for Pl061Gpio {
 impl MmioDevice for Pl061Gpio {
     /// Handles a read from a GPIO register.
     fn read(&mut self, offset: u64, size: usize) -> Result<u64, MmioError> {
-        // The PL061 specification allows for byte, half-word, and word accesses.
-        // For simplicity, we'll handle reads as if they are byte-sized and the
-        // hypervisor will handle alignment to the requested size.
-        // The guest driver for qemu_virt typically uses byte accesses here.
-        if size > 4 {
+        // The guest may use 8-byte accesses (e.g., LDP instruction), so we must
+        // handle them gracefully. We allow power-of-two sizes up to 8 bytes.
+        // Since all PL061 registers are 32-bits or smaller, for any valid access
+        // size, we return the register value zero-extended to 64 bits. The
+        // hypervisor is expected to handle truncation if necessary.
+        if size > 8 || size == 0 || (size & (size - 1)) != 0 {
             return Err(MmioError::InvalidSize { size });
         }
 
@@ -120,7 +121,9 @@ impl MmioDevice for Pl061Gpio {
 
     /// Handles a write to a GPIO register.
     fn write(&mut self, offset: u64, size: usize, value: u64) -> Result<(), MmioError> {
-        if size > 4 {
+        // The guest may use 8-byte accesses (e.g., STP instruction).
+        // We allow power-of-two sizes up to 8 bytes.
+        if size > 8 || size == 0 || (size & (size - 1)) != 0 {
             return Err(MmioError::InvalidSize { size });
         }
 
