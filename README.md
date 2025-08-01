@@ -25,6 +25,8 @@ At the same time, we need to enrich features for this VMM:
 
 ## Status
 
+I am having issue using the Rust binding of Apple Hypervisor Framework, as it failed to enable some common pattern (e.g., <https://github.com/marysaka/ahv/issues/3>). I plan to work on updating the Rust binding first.
+
 Right now, it can print out:
 
 ```
