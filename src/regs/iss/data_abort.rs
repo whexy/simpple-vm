@@ -1,5 +1,5 @@
 use crate::regs::{SyndromeAccessSize, VRegister};
-use ahv::*;
+use ahvf::*;
 use bitfield::bitfield;
 
 bitfield! {

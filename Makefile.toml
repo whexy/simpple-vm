@@ -2,7 +2,7 @@
 default_to_workspace = false
 
 [env]
-BINARIES = "simpple-vm simpple-blog"
+BINARIES = "simpple-vm"
 ENTITLEMENTS_PATH = "entitlements.plist"
 
 # Build debug version for all binaries
@@ -69,4 +69,3 @@ dependencies = ["verify-release"]
 
 [tasks.default]
 alias = "build-and-sign"
-

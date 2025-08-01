@@ -3,16 +3,12 @@ name = "simpple-vm"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "simpple-blog"
-path = "src/simpple-blog/main.rs"
-
 [lib]
 name = "simpple_vm"
 path = "src/lib.rs"
 
 [dependencies]
-ahv = { path = "../ahv", version = "0.5.0", features = ["macos_15_0_0"] }
+ahvf = { path = "../ahvf", version = "0.1.0" }
 anyhow = "1.0"
 bitfield = "0.19.1"
 capstone = "0.13.0"

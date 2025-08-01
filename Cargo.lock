@@ -12,8 +12,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "ahv"
-version = "0.5.0"
+name = "ahvf"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.9.1",
+ "libc",
+]
 
 [[package]]
 name = "anstream"
@@ -96,6 +100,12 @@ name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitflags"
+version = "2.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967"
 
 [[package]]
 name = "capstone"
@@ -209,7 +219,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab903ae27e1006cb336cc8af1991690c788892cd2184a3890547581afcf5a1f5"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "cmake",
  "libc",
  "pkg-config",
@@ -337,7 +347,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 name = "simpple-vm"
 version = "0.1.0"
 dependencies = [
- "ahv",
+ "ahvf",
  "anyhow",
  "bitfield",
  "capstone",

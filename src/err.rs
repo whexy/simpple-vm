@@ -1,4 +1,4 @@
-use ahv::HypervisorError;
+use ahvf::HypervisorError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

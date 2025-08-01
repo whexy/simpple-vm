@@ -5,13 +5,13 @@ use anyhow::{Context, Result};
 // Shared memory management
 #[derive(Debug)]
 struct Segment {
-    base: u64,                     // base address (guest physical)
-    size: usize,                   // size
-    handle: ahv::AllocationHandle, // handle to the memory allocator
+    base: u64,                      // base address (guest physical)
+    size: usize,                    // size
+    handle: ahvf::AllocationHandle, // handle to the memory allocator
 }
 
 impl Segment {
-    pub fn new(handle: ahv::AllocationHandle, base: u64, size: usize) -> Self {
+    pub fn new(handle: ahvf::AllocationHandle, base: u64, size: usize) -> Self {
         Segment { base, size, handle }
     }
 
@@ -38,10 +38,10 @@ pub struct SharedMemory {
 impl SharedMemory {
     pub fn add_segment(
         &mut self,
-        vm: &mut ahv::VirtualMachine,
+        vm: &mut ahvf::VirtualMachine,
         base: u64,
         size: usize,
-        permission: ahv::MemoryPermission,
+        permission: ahvf::MemoryPermission,
     ) -> Result<(), SimppleError> {
         // Check for overlaps with existing segments
         for segment in &self.segments {
@@ -85,7 +85,7 @@ impl SharedMemory {
     // Raw byte operations
     pub fn read_bytes(
         &self,
-        vm: &ahv::VirtualMachine,
+        vm: &ahvf::VirtualMachine,
         address: u64,
         size: usize,
     ) -> Result<Vec<u8>, SimppleError> {
@@ -103,7 +103,7 @@ impl SharedMemory {
 
     pub fn write_bytes(
         &self,
-        vm: &mut ahv::VirtualMachine,
+        vm: &mut ahvf::VirtualMachine,
         address: u64,
         data: &[u8],
     ) -> Result<(), SimppleError> {
@@ -121,7 +121,7 @@ impl SharedMemory {
     }
 
     // Generic read/write for any sized integer type
-    pub fn read<T>(&self, vm: &ahv::VirtualMachine, address: u64) -> Result<T>
+    pub fn read<T>(&self, vm: &ahvf::VirtualMachine, address: u64) -> Result<T>
     where
         T: FromBytes,
     {
@@ -136,7 +136,7 @@ impl SharedMemory {
         Ok(T::from_le_bytes(&bytes))
     }
 
-    pub fn write<T>(&self, vm: &mut ahv::VirtualMachine, address: u64, value: T) -> Result<()>
+    pub fn write<T>(&self, vm: &mut ahvf::VirtualMachine, address: u64, value: T) -> Result<()>
     where
         T: ToBytes,
     {
