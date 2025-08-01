@@ -1,6 +1,7 @@
 use crate::devices::MmioDevice;
 use crate::err::MmioError;
 use std::collections::VecDeque;
+use std::io::{self, Write};
 
 // --- ARM PL011 Register Offsets ---
 // Note: These are 4-byte (word) aligned offsets.
@@ -29,8 +30,11 @@ const CR_UARTEN: u32 = 1 << 0; // UART Enable
 // Default FIFO size when enabled, from QEMU's implementation.
 const PL011_FIFO_DEPTH: usize = 16;
 
-/// ARM PL011 UART device state machine (minimal implementation)
-pub struct Pl011Device {
+// Standard ARM PL011 Peripheral ID
+const PL011_PERIPHERAL_ID: [u8; 8] = [0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1];
+
+/// ARM PL011 UART device state machine (generic over output interface)
+pub struct Pl011Device<W: Write> {
     // Data FIFOs
     rx_fifo: VecDeque<u8>,
     tx_fifo: VecDeque<u8>,
@@ -41,20 +45,21 @@ pub struct Pl011Device {
     cr: u32,    // Control Register
     imsc: u32,  // Interrupt Mask
 
-    // Peripheral ID registers
-    id: [u8; 8],
-
     // FIFO configuration
     fifo_enabled: bool,
     rx_fifo_size: usize,
     tx_fifo_size: usize,
 
-    // Output callback for transmitted data
-    output_handler: Option<Box<dyn FnMut(u8) + Send>>,
+    // Line buffering for output
+    line_buffer: Vec<u8>,
+
+    // Generic output interface
+    output: W,
 }
 
-impl Default for Pl011Device {
-    fn default() -> Self {
+impl<W: Write> Pl011Device<W> {
+    /// Creates a new PL011 device with the specified output interface
+    pub fn new(output: W) -> Self {
         let mut uart = Self {
             rx_fifo: VecDeque::new(),
             tx_fifo: VecDeque::new(),
@@ -65,25 +70,14 @@ impl Default for Pl011Device {
             cr: CR_TXE | CR_RXE, // U-Boot expects TX/RX to be enabled
             imsc: 0,
 
-            // Standard ARM PL011 Peripheral ID
-            id: [0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1],
-
             fifo_enabled: false,
             rx_fifo_size: 1,
             tx_fifo_size: 1,
-            output_handler: None,
+            line_buffer: Vec::new(),
+            output,
         };
         uart.update_status();
         uart
-    }
-}
-
-impl Pl011Device {
-    pub fn set_output_handler<F>(&mut self, handler: F)
-    where
-        F: FnMut(u8) + Send + 'static,
-    {
-        self.output_handler = Some(Box::new(handler));
     }
 
     /// Input data to the UART (simulates receiving data)
@@ -94,11 +88,55 @@ impl Pl011Device {
         self.update_status();
     }
 
-    /// The PL011 status is maintained in the `flags` register.
+    /// Get a mutable reference to the output interface
+    pub fn output_mut(&mut self) -> &mut W {
+        &mut self.output
+    }
+
+    /// Get a reference to the output interface
+    pub fn output(&self) -> &W {
+        &self.output
+    }
+
+    /// Flush any remaining content in the line buffer to the output
+    pub fn flush_line_buffer(&mut self) -> io::Result<()> {
+        if !self.line_buffer.is_empty() {
+            self.output.write_all(&self.line_buffer)?;
+            self.output.flush()?;
+            self.line_buffer.clear();
+        }
+        Ok(())
+    }
+
+    /// Handle transmitted character with line buffering
+    fn handle_transmitted_char(&mut self, byte: u8) -> io::Result<()> {
+        match byte {
+            b'\n' => {
+                // Line complete - print the entire line including newline
+                self.line_buffer.push(byte);
+                self.output.write_all(&self.line_buffer)?;
+                self.output.flush()?;
+                self.line_buffer.clear();
+            }
+            b'\r' => {
+                // Carriage return - handle different line ending styles
+                self.line_buffer.push(byte);
+                // Don't flush yet in case this is followed by \n (CRLF)
+            }
+            _ => {
+                // Regular character - add to line buffer
+                self.line_buffer.push(byte);
+            }
+        }
+        Ok(())
+    }
+
+    /// Updates the PL011 status flags based on FIFO states
     fn update_status(&mut self) {
         // Clear status bits
         self.flags &= !(FLAG_RXFE | FLAG_RXFF | FLAG_TXFE | FLAG_TXFF);
 
+        // Update receive FIFO flags
         if self.rx_fifo.is_empty() {
             self.flags |= FLAG_RXFE; // Receive FIFO empty
         }
@@ -106,6 +144,7 @@ impl Pl011Device {
             self.flags |= FLAG_RXFF; // Receive FIFO full
         }
 
+        // Update transmit FIFO flags
         if self.tx_fifo.is_empty() {
             self.flags |= FLAG_TXFE; // Transmit FIFO empty
         }
@@ -114,12 +153,14 @@ impl Pl011Device {
         }
     }
 
+    /// Read from the data register (receives data)
     fn read_dr(&mut self) -> u64 {
         let data = self.rx_fifo.pop_front().unwrap_or(0);
         self.update_status();
-        data as u64
+        u64::from(data)
     }
 
+    /// Write to the data register (transmits data)
     fn write_dr(&mut self, value: u8) {
         // Check if UART and transmitter are enabled
         if (self.cr & (CR_UARTEN | CR_TXE)) != (CR_UARTEN | CR_TXE) {
@@ -130,20 +171,22 @@ impl Pl011Device {
         if self.tx_fifo.len() < self.tx_fifo_size {
             self.tx_fifo.push_back(value);
             // For simplicity, we immediately "transmit" the character.
-            if let Some(ref mut handler) = self.output_handler {
-                handler(value);
-                self.tx_fifo.pop_front(); // Immediately sent
-            }
+            // Ignore I/O errors during transmission (hardware behavior)
+            let _ = self.handle_transmitted_char(value);
+            self.tx_fifo.pop_front(); // Immediately sent
         }
         self.update_status();
     }
 
+    /// Write to the line control register
     fn write_lcr_h(&mut self, value: u32) {
         self.lcr_h = value;
-        let fifo_just_enabled = (value & LCR_H_FEN) != 0;
+        let fifo_enable_requested = (value & LCR_H_FEN) != 0;
 
-        if fifo_just_enabled != self.fifo_enabled {
-            self.fifo_enabled = fifo_just_enabled;
+        if fifo_enable_requested != self.fifo_enabled {
+            self.fifo_enabled = fifo_enable_requested;
+
+            // Update FIFO sizes based on enable state
             if self.fifo_enabled {
                 self.rx_fifo_size = PL011_FIFO_DEPTH;
                 self.tx_fifo_size = PL011_FIFO_DEPTH;
@@ -151,15 +194,27 @@ impl Pl011Device {
                 self.rx_fifo_size = 1;
                 self.tx_fifo_size = 1;
             }
+
             // Real hardware would reset FIFOs here, so we do too.
             self.rx_fifo.clear();
             self.tx_fifo.clear();
             self.update_status();
         }
     }
+
+    /// Get the peripheral ID byte at the specified index
+    fn get_peripheral_id_byte(&self, index: usize) -> u8 {
+        PL011_PERIPHERAL_ID.get(index).copied().unwrap_or(0)
+    }
 }
 
-impl MmioDevice for Pl011Device {
+impl<W: Write> Drop for Pl011Device<W> {
+    fn drop(&mut self) {
+        let _ = self.flush_line_buffer();
+    }
+}
+
+impl<W: Write> MmioDevice for Pl011Device<W> {
     fn read(&mut self, offset: u64, size: usize) -> Result<u64, MmioError> {
         // PL011 has 4-byte registers
         if size != 4 {
@@ -168,10 +223,10 @@ impl MmioDevice for Pl011Device {
 
         let value = match offset {
             UARTDR => self.read_dr(),
-            UARTFR => self.flags as u64,
-            UARTLCR_H => self.lcr_h as u64,
-            UARTCR => self.cr as u64,
-            UARTIMSC => self.imsc as u64,
+            UARTFR => u64::from(self.flags),
+            UARTLCR_H => u64::from(self.lcr_h),
+            UARTCR => u64::from(self.cr),
+            UARTIMSC => u64::from(self.imsc),
 
             // Stub other common registers to prevent unmapped access errors
             0x028 => 0, // UARTFBRD (Fractional Baud Rate)
@@ -182,11 +237,7 @@ impl MmioDevice for Pl011Device {
             // Peripheral ID registers
             UART_PERIPH_ID_BASE..=0xFFC => {
                 let index = ((offset - UART_PERIPH_ID_BASE) / 4) as usize;
-                if index < self.id.len() {
-                    self.id[index] as u64
-                } else {
-                    0
-                }
+                u64::from(self.get_peripheral_id_byte(index))
             }
 
             _ => return Err(MmioError::UnmappedAccess(offset)),
@@ -220,10 +271,59 @@ impl MmioDevice for Pl011Device {
     }
 
     fn reset(&mut self) {
-        *self = Pl011Device::default();
+        // We can't easily reset to default with a generic type, so we clear state manually
+        self.rx_fifo.clear();
+        self.tx_fifo.clear();
+        self.flags = FLAG_TXFE | FLAG_RXFE;
+        self.lcr_h = 0;
+        self.cr = CR_TXE | CR_RXE;
+        self.imsc = 0;
+        self.fifo_enabled = false;
+        self.rx_fifo_size = 1;
+        self.tx_fifo_size = 1;
+        self.line_buffer.clear();
+        self.update_status();
     }
 
     fn get_size(&self) -> u64 {
         0x1000 // PL011 occupies a 4KB memory region
+    }
+}
+
+// Type aliases for common use cases
+pub type Pl011Stdout = Pl011Device<io::Stdout>;
+pub type Pl011File = Pl011Device<std::fs::File>;
+pub type Pl011Vec = Pl011Device<std::io::Cursor<Vec<u8>>>;
+
+// Convenience constructors
+impl Pl011Device<io::Stdout> {
+    /// Create a PL011 device that outputs to stdout
+    pub fn stdout() -> Self {
+        Self::new(io::stdout())
+    }
+}
+
+impl Pl011Device<std::fs::File> {
+    /// Create a PL011 device that outputs to a file
+    pub fn file<P: AsRef<std::path::Path>>(path: P) -> io::Result<Self> {
+        let file = std::fs::File::create(path)?;
+        Ok(Self::new(file))
+    }
+}
+
+impl Pl011Device<std::io::Cursor<Vec<u8>>> {
+    /// Create a PL011 device that outputs to a buffer (useful for testing)
+    pub fn buffer() -> Self {
+        Self::new(std::io::Cursor::new(Vec::new()))
+    }
+
+    /// Get the buffered output as a byte slice
+    pub fn get_output(&self) -> &[u8] {
+        self.output.get_ref()
+    }
+
+    /// Get the buffered output as a string (assuming UTF-8)
+    pub fn get_output_string(&self) -> Result<String, std::string::FromUtf8Error> {
+        String::from_utf8(self.output.get_ref().clone())
     }
 }

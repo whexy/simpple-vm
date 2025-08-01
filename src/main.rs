@@ -1,11 +1,13 @@
 use ahv::*;
 use anyhow::Result;
 use simpple_vm::debugger::Debugger;
-use simpple_vm::devices::uart::Pl011Device;
+use simpple_vm::devices::gpio::Pl061Gpio;
+use simpple_vm::devices::timer::get_cntpct_el0;
+use simpple_vm::devices::uart::{Pl011Device, Pl011Stdout};
 use simpple_vm::mems::SharedMemory;
 use simpple_vm::regs::iss::{DataAbortISS, SysRegAbortISS};
 use simpple_vm::regs::utils::{get_register_value, set_register_value};
-use simpple_vm::regs::{EsrEl2, ExceptionClass, SpsrEl3};
+use simpple_vm::regs::{EmulatedSystemRegister, EsrEl2, ExceptionClass, SpsrEl3};
 use simpple_vm::{MmioManager, SimppleError};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -14,10 +16,11 @@ mod payload;
 use payload::{load_dtb, load_uboot};
 
 const FIRMWARE_BASE: u64 = 0x0;
-// const FIRMWARE_SIZE: u64 = 128 * 1024 * 1024; // 128 MiB for firmware
+const FIRMWARE_SIZE: usize = 128 * 1024 * 1024; // 128 MiB for firmware
 const MEMORY_BASE: u64 = 0x40000000;
-// const MEMORY_SIZE: usize = 1024 * 1024 * 1024; // 1 GiB
+const MEMORY_SIZE: usize = 1024 * 1024 * 1024; // 1GiB of memory
 const UART_BASE: u64 = 0x9000000; // Base address for UART
+const GPIO_BASE: u64 = 0x3fffe000;
 
 fn run() -> Result<(), SimppleError> {
     env_logger::init();
@@ -31,32 +34,31 @@ fn run() -> Result<(), SimppleError> {
     // Main Memory
     mmu.add_segment(
         &mut virtual_machine,
-        0x0,
-        2 * 1024 * 1024 * 1024, // 2 GiB for main memory,
+        FIRMWARE_BASE,
+        FIRMWARE_SIZE,
+        MemoryPermission::READ_WRITE_EXECUTE,
+    )?;
+
+    mmu.add_segment(
+        &mut virtual_machine,
+        MEMORY_BASE,
+        MEMORY_SIZE,
         MemoryPermission::READ_WRITE_EXECUTE,
     )?;
 
     // Setup devices
     let mut mmio_manager = MmioManager::default();
-    let mut uart_device = Pl011Device::default();
-    let output_buffer = Arc::new(Mutex::new(Vec::new()));
-    let output_buffer_clone = output_buffer.clone();
-    uart_device.set_output_handler(move |data| {
-        let mut buffer = output_buffer_clone.lock().unwrap();
-        buffer.push(data);
-
-        // Print u-boot output in real time
-        if data == b'\n' || buffer.len() > 80 {
-            let line = String::from_utf8_lossy(&buffer);
-            print!("U-boot: {line}");
-            std::io::stdout().flush().unwrap();
-            buffer.clear();
-        }
-    });
+    let uart_device = Pl011Device::stdout();
 
     mmio_manager.register_device(
         UART_BASE, // Base address for UART
         Box::new(uart_device),
+    )?;
+
+    let gpio_device = Pl061Gpio::default();
+    mmio_manager.register_device(
+        GPIO_BASE, // Base address for GPIO
+        Box::new(gpio_device),
     )?;
 
     // Setup Debugger
@@ -82,6 +84,19 @@ fn run() -> Result<(), SimppleError> {
     vcpu.set_register(Register::PC, FIRMWARE_BASE)?;
     vcpu.set_trap_debug_exceptions(true)?;
 
+    vcpu.set_vtimer_mask(false)?;
+
+    // let vcpu_addr = &mut vcpu as *mut VirtualCpu as usize;
+    // thread::spawn(move || {
+    //     thread::sleep(std::time::Duration::from_secs(10));
+    //     unsafe {
+    //         let vcpu_ptr = vcpu_addr as *mut ahv::VirtualCpu;
+    //         if let Some(vcpu_ref) = vcpu_ptr.as_mut() {
+    //             let _ = vcpu_ref.exit();
+    //         }
+    //     }
+    // });
+
     loop {
         let result = vcpu.run()?;
         match result {
@@ -95,34 +110,51 @@ fn run() -> Result<(), SimppleError> {
 
                         match iss.is_write() {
                             true => {
-                                mmio_manager
-                                    .handle_write(
-                                        exception.physical_address,
-                                        iss.access_size().into(),
-                                        get_register_value(&mut vcpu, iss.access_register())?,
-                                    )
-                                    .inspect_err(|_| {
-                                        let _ = debugger.print_debug_info(
-                                            &virtual_machine,
-                                            &mut vcpu,
-                                            &mmu,
+                                let mmio_result = mmio_manager.handle_write(
+                                    exception.physical_address,
+                                    iss.access_size().into(),
+                                    get_register_value(&mut vcpu, iss.access_register())?,
+                                );
+                                match mmio_result {
+                                    Ok(_) => {}
+                                    Err(_) => {
+                                        log::error!(
+                                            "invalid read from {:#0x}",
+                                            exception.physical_address
                                         );
-                                    })?;
+                                        // let _ = debugger.print_debug_info(
+                                        //     &virtual_machine,
+                                        //     &mut vcpu,
+                                        //     &mmu,
+                                        // );
+                                    }
+                                }
                             }
                             false => {
-                                let value = mmio_manager
-                                    .handle_read(
-                                        exception.physical_address,
-                                        iss.access_size().into(),
-                                    )
-                                    .inspect_err(|_| {
+                                let mmio_result = mmio_manager.handle_read(
+                                    exception.physical_address,
+                                    iss.access_size().into(),
+                                );
+                                match mmio_result {
+                                    Ok(value) => {
+                                        set_register_value(
+                                            &mut vcpu,
+                                            iss.access_register(),
+                                            value,
+                                        )?;
+                                    }
+                                    Err(_) => {
+                                        log::error!(
+                                            "invalid write to {:#0x}",
+                                            exception.physical_address
+                                        );
                                         let _ = debugger.print_debug_info(
                                             &virtual_machine,
                                             &mut vcpu,
                                             &mmu,
                                         );
-                                    })?;
-                                set_register_value(&mut vcpu, iss.access_register(), value)?;
+                                    }
+                                };
                             }
                         }
                     }
@@ -134,13 +166,20 @@ fn run() -> Result<(), SimppleError> {
                     ExceptionClass::TrappedSysregAArch64 => {
                         log::error!("Trapped system register access detected.");
                         let iss = SysRegAbortISS::from_raw(esr_el2.iss() as u32);
-                        let instr = iss.reconstruct();
 
-                        let payload = instr.to_le_bytes();
-                        debugger.decode(&payload, vcpu.get_register(Register::PC)?)?;
+                        let system_register = iss.system_register();
+                        let gp_register = iss.access_register();
+                        println!(
+                            "Accessing system register: {system_register:?} using {gp_register:?}"
+                        );
 
-                        debugger.print_debug_info(&virtual_machine, &mut vcpu, &mmu)?;
-                        break;
+                        match system_register {
+                            EmulatedSystemRegister::CntpCtEl0 => {
+                                let value = get_cntpct_el0();
+                                set_register_value(&mut vcpu, gp_register, value)?;
+                                log::info!("Successfully emulating accessed CntpCtEl0: {value:#x}");
+                            }
+                        }
                     }
                     exception_class => {
                         debugger.print_debug_info(&virtual_machine, &mut vcpu, &mmu)?;
@@ -152,6 +191,7 @@ fn run() -> Result<(), SimppleError> {
             reason => {
                 debugger.print_debug_info(&virtual_machine, &mut vcpu, &mmu)?;
                 log::error!("Unexpected exit reason: {reason:#?}");
+                break;
             }
         };
 

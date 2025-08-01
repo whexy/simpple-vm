@@ -19,3 +19,8 @@ pub fn set_register_value(vcpu: &mut VirtualCpu, vreg: VRegister, value: u64) ->
         VRegister::ZeroRegister => Ok(()), // Zero register is read-only and always zero
     }
 }
+
+#[derive(Debug)]
+pub enum EmulatedSystemRegister {
+    CntpCtEl0,
+}

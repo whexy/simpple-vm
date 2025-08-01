@@ -1,4 +1,4 @@
-use crate::regs::VRegister;
+use crate::regs::{EmulatedSystemRegister, VRegister};
 use ahv::*;
 use bitfield::bitfield;
 
@@ -106,6 +106,16 @@ impl SysRegAbortISS {
             0b11110 => VRegister::Register(Register::X30),
             0b11111 => VRegister::ZeroRegister, // access to XZR (zero register)
             srt => panic!("Invalid register transfer value {srt}"),
+        }
+    }
+
+    pub fn system_register(&self) -> EmulatedSystemRegister {
+        match (self.op0(), self.op1(), self.crn(), self.crm(), self.op2()) {
+            (3, 7, 7, 12, 1) => EmulatedSystemRegister::CntpCtEl0,
+            (3, 3, 14, 0, 1) => EmulatedSystemRegister::CntpCtEl0,
+            (op0, op1, crn, crm, op2) => panic!(
+                "Unsupported system register access: op0={op0}, op1={op1}, crn={crn}, crm={crm}, op2={op2}"
+            ),
         }
     }
 }
